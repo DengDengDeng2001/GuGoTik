@@ -35,7 +35,7 @@ func ActionFavoriteHandler(c *gin.Context) {
 		})
 		return
 	}
-
+	//检查请求中的 ActionType 是否为有效值（1 或 2）
 	actionType := uint32(req.ActionType)
 	if actionType != uint32(1) && actionType != uint32(2) {
 		c.JSON(http.StatusOK, models.ActionCommentRes{
