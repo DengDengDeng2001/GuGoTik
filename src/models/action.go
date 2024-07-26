@@ -6,7 +6,7 @@ import (
 )
 
 type Action struct {
-	Type         uint   // 用户操作的行为类型，如：1表示点赞相关
+	Type         uint   // 用户操作的行为类型，如：1表示点赞 2表示用户关注
 	Name         string // 用户操作的动作名称，如：FavoriteNameActionLog 表示点赞相关操作
 	SubName      string // 用户操作动作的子名称，如：FavoriteUpActionLog 表示给视频增加赞操作
 	ServiceName  string // 服务来源，添加服务的名称，如 FavoriteService

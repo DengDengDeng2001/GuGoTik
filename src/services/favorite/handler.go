@@ -85,7 +85,7 @@ func produceFavorite(ctx context.Context, event models.RecommendEvent) {
 	defer span.End()
 	logging.SetSpanWithHostname(span)
 	logger := logging.LogService("FavoriteService.FavoriteEventPublisher").WithContext(ctx)
-	data, err := json.Marshal(event)
+	data, err := json.Marshal(event) // 序列化
 	if err != nil {
 		logger.WithFields(logrus.Fields{
 			"err": err,
@@ -94,7 +94,7 @@ func produceFavorite(ctx context.Context, event models.RecommendEvent) {
 		return
 	}
 
-	headers := rabbitmq.InjectAMQPHeaders(ctx)
+	headers := rabbitmq.InjectAMQPHeaders(ctx) // 注入headers
 
 	err = channel.PublishWithContext(ctx,
 		strings.EventExchange,
@@ -125,10 +125,10 @@ func (c FavoriteServiceServerImpl) FavoriteAction(ctx context.Context, req *favo
 	logger.WithFields(logrus.Fields{
 		"ActorId":     req.ActorId,
 		"video_id":    req.VideoId,
-		"action_type": req.ActionType, //点赞 1 2 取消点赞
+		"action_type": req.ActionType, // 1=点赞 2=取消点赞
 	}).Debugf("Process start")
 
-	// Check if video exists
+	// 检查video是否存在
 	videoExistResp, err := feedClient.QueryVideoExisted(ctx, &feed.VideoExistRequest{
 		VideoId: req.VideoId,
 	})
@@ -143,7 +143,7 @@ func (c FavoriteServiceServerImpl) FavoriteAction(ctx context.Context, req *favo
 		}
 		return
 	}
-
+	// 若视频不存在
 	if !videoExistResp.Existed {
 		logger.WithFields(logrus.Fields{
 			"VideoId": req.VideoId,
@@ -155,10 +155,12 @@ func (c FavoriteServiceServerImpl) FavoriteAction(ctx context.Context, req *favo
 		}
 		return
 	}
-
+	// 获取视频信息
 	VideosRes, err := feedClient.QueryVideos(ctx, &feed.QueryVideosRequest{
-		ActorId:  req.ActorId,
-		VideoIds: []uint32{req.VideoId},
+		ActorId: req.ActorId, // 操作者id
+		VideoIds: []uint32{
+			req.VideoId, // 要查询的视频id
+		},
 	})
 
 	if err != nil || VideosRes.StatusCode != strings.ServiceOKCode {
@@ -175,12 +177,15 @@ func (c FavoriteServiceServerImpl) FavoriteAction(ctx context.Context, req *favo
 		}, err
 	}
 
-	user_liked := VideosRes.VideoList[0].Author.Id
-
+	userLiked := VideosRes.VideoList[0].Author.Id // 被点赞用户的id
+	// 使用zset保存点赞数据 key：userId -> {[]value：videoId, []score：点赞的时间戳}
 	userId := fmt.Sprintf("%suser_like_%d", config.EnvCfg.RedisPrefix, req.ActorId)
 	videoId := fmt.Sprintf("%d", req.VideoId)
+	// 检查当前点赞记录是否存在，防止重复点赞
+	// 查询redis，当前记录存在，返回一个时间戳，当前记录不存在，返回redis.Nil
 	value, err := redis2.Client.ZScore(ctx, userId, videoId).Result()
-	//判断是否重复点赞
+
+	// redis.Nil以外的错误
 	if err != redis.Nil && err != nil {
 		logger.WithFields(logrus.Fields{
 			"ActorId":  req.ActorId,
@@ -191,13 +196,13 @@ func (c FavoriteServiceServerImpl) FavoriteAction(ctx context.Context, req *favo
 
 		return
 	}
-
+	// redis中不存在该点赞记录
 	if err == redis.Nil {
 		err = nil
 	}
-
+	// 处理重复点赞 1=点赞 2=取消点赞
 	if req.ActionType == 1 {
-		//重复点赞
+		// 时间戳存在 说明重复点赞
 		if value > 0 {
 			resp = &favorite.FavoriteResponse{
 				StatusCode: strings.FavoriteServiceDuplicateCode,
@@ -208,14 +213,14 @@ func (c FavoriteServiceServerImpl) FavoriteAction(ctx context.Context, req *favo
 				"video_id": req.VideoId,
 			}).Info("user duplicate like")
 			return
-		} else { //正常点赞
+		} else { // 正常点赞，开启redis事务
 			_, err = redis2.Client.TxPipelined(ctx, func(pipe redis.Pipeliner) error {
-				videoId := fmt.Sprintf("%svideo_like_%d", config.EnvCfg.RedisPrefix, req.VideoId)      // 该视频的点赞数量
-				user_like_Id := fmt.Sprintf("%suser_like_%d", config.EnvCfg.RedisPrefix, req.ActorId)  // 用户的点赞
-				user_liked_id := fmt.Sprintf("%suser_liked_%d", config.EnvCfg.RedisPrefix, user_liked) // 被赞用户的获赞数量
+				videoId := fmt.Sprintf("%svideo_like_%d", config.EnvCfg.RedisPrefix, req.VideoId)   // 该视频的点赞数量，存入string
+				userLikedId := fmt.Sprintf("%suser_liked_%d", config.EnvCfg.RedisPrefix, userLiked) // 被赞用户的获赞数量，存入string
+				userLikeId := fmt.Sprintf("%suser_like_%d", config.EnvCfg.RedisPrefix, req.ActorId) // 用户的点赞记录，存入zset
 				pipe.IncrBy(ctx, videoId, 1)
-				pipe.IncrBy(ctx, user_liked_id, 1)
-				pipe.ZAdd(ctx, user_like_Id, redis.Z{Score: float64(time.Now().Unix()), Member: req.VideoId})
+				pipe.IncrBy(ctx, userLikedId, 1)
+				pipe.ZAdd(ctx, userLikeId, redis.Z{Score: float64(time.Now().Unix()), Member: req.VideoId})
 				return nil
 			})
 			// Publish event to event_exchange and audit_exchange
@@ -253,7 +258,7 @@ func (c FavoriteServiceServerImpl) FavoriteAction(ctx context.Context, req *favo
 			}
 		}
 	} else {
-		//没有的点过赞
+		// 时间戳不存在 说明重复取消点赞
 		if value == 0 {
 			resp = &favorite.FavoriteResponse{
 				StatusCode: strings.FavoriteServiceCancelCode,
@@ -265,15 +270,14 @@ func (c FavoriteServiceServerImpl) FavoriteAction(ctx context.Context, req *favo
 				"video_id": req.VideoId,
 			}).Info("User did not like, cancel liking")
 			return
-		} else { //正常取消点赞
+		} else { // 正常取消点赞
 			_, err = redis2.Client.TxPipelined(ctx, func(pipe redis.Pipeliner) error {
-				videoId := fmt.Sprintf("%svideo_like_%d", config.EnvCfg.RedisPrefix, req.VideoId)      // 该视频的点赞数量
-				user_like_Id := fmt.Sprintf("%suser_like_%d", config.EnvCfg.RedisPrefix, req.ActorId)  // 用户的点赞
-				user_liked_id := fmt.Sprintf("%suser_liked_%d", config.EnvCfg.RedisPrefix, user_liked) // 被赞用户的获赞数量
+				videoId := fmt.Sprintf("%svideo_like_%d", config.EnvCfg.RedisPrefix, req.VideoId)     // 该视频的点赞数量
+				user_liked_id := fmt.Sprintf("%suser_liked_%d", config.EnvCfg.RedisPrefix, userLiked) // 被赞用户的获赞数量
+				user_like_Id := fmt.Sprintf("%suser_like_%d", config.EnvCfg.RedisPrefix, req.ActorId) // 用户的点赞
 				pipe.IncrBy(ctx, videoId, -1)
 				pipe.IncrBy(ctx, user_liked_id, -1)
 				pipe.ZRem(ctx, user_like_Id, req.VideoId)
-
 				return nil
 			})
 
@@ -342,7 +346,7 @@ func (c FavoriteServiceServerImpl) FavoriteList(ctx context.Context, req *favori
 		"user_id": req.UserId,
 	}).Debugf("Process start")
 
-	//以下判断用户是否合法，我觉得大可不必
+	// 判断用户是否存在
 	userResponse, err := userClient.GetUserExistInformation(ctx, &user.UserExistRequest{
 		UserId: req.UserId,
 	})

@@ -9,17 +9,17 @@ import (
 
 type Message struct {
 	ID             uint32 `gorm:"not null;primarykey;autoIncrement"`
-	ToUserId       uint32 `gorm:"not null"`
-	FromUserId     uint32 `gorm:"not null"`
-	ConversationId string `gorm:"not null" index:"conversationid"`
-	Content        string `gorm:"not null"`
+	ToUserId       uint32 `gorm:"not null"`                        // 接收者用户 ID
+	FromUserId     uint32 `gorm:"not null"`                        // 发送者用户 ID
+	ConversationId string `gorm:"not null" index:"conversationid"` // 标识消息所属的对话
+	Content        string `gorm:"not null"`                        // 存储消息的文本内容
 
 	// Create_time  time.Time `gorm:"not null"`
-	//Updatetime deleteTime
+	// Updatetime deleteTime
 	gorm.Model
 }
 
-// es 使用
+// ElasticSearch 使用
 type EsMessage struct {
 	ToUserId       uint32    `json:"toUserid"`
 	FromUserId     uint32    `json:"fromUserId"`
