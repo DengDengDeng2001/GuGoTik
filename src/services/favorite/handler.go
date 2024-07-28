@@ -116,6 +116,7 @@ func produceFavorite(ctx context.Context, event models.RecommendEvent) {
 	}
 }
 
+// 自身服务调用：用户点赞/取消点赞
 func (c FavoriteServiceServerImpl) FavoriteAction(ctx context.Context, req *favorite.FavoriteRequest) (resp *favorite.FavoriteResponse, err error) {
 	ctx, span := tracing.Tracer.Start(ctx, "FavoriteServiceServerImpl")
 	defer span.End()
@@ -128,7 +129,7 @@ func (c FavoriteServiceServerImpl) FavoriteAction(ctx context.Context, req *favo
 		"action_type": req.ActionType, // 1=点赞 2=取消点赞
 	}).Debugf("Process start")
 
-	// 检查video是否存在
+	// 1. 检查video是否存在
 	videoExistResp, err := feedClient.QueryVideoExisted(ctx, &feed.VideoExistRequest{
 		VideoId: req.VideoId,
 	})
@@ -155,7 +156,7 @@ func (c FavoriteServiceServerImpl) FavoriteAction(ctx context.Context, req *favo
 		}
 		return
 	}
-	// 获取视频信息
+	// 2. 获取详细视频信息
 	VideosRes, err := feedClient.QueryVideos(ctx, &feed.QueryVideosRequest{
 		ActorId: req.ActorId, // 操作者id
 		VideoIds: []uint32{
@@ -181,7 +182,7 @@ func (c FavoriteServiceServerImpl) FavoriteAction(ctx context.Context, req *favo
 	// 使用zset保存点赞数据 key：userId -> {[]value：videoId, []score：点赞的时间戳}
 	userId := fmt.Sprintf("%suser_like_%d", config.EnvCfg.RedisPrefix, req.ActorId)
 	videoId := fmt.Sprintf("%d", req.VideoId)
-	// 检查当前点赞记录是否存在，防止重复点赞
+	// 3. 检查当前点赞记录是否存在，防止重复点赞
 	// 查询redis，当前记录存在，返回一个时间戳，当前记录不存在，返回redis.Nil
 	value, err := redis2.Client.ZScore(ctx, userId, videoId).Result()
 
@@ -200,7 +201,7 @@ func (c FavoriteServiceServerImpl) FavoriteAction(ctx context.Context, req *favo
 	if err == redis.Nil {
 		err = nil
 	}
-	// 处理重复点赞 1=点赞 2=取消点赞
+	// 4. 处理重复点赞 1=点赞 2=取消点赞
 	if req.ActionType == 1 {
 		// 时间戳存在 说明重复点赞
 		if value > 0 {
@@ -216,7 +217,7 @@ func (c FavoriteServiceServerImpl) FavoriteAction(ctx context.Context, req *favo
 		} else { // 正常点赞，开启redis事务
 			_, err = redis2.Client.TxPipelined(ctx, func(pipe redis.Pipeliner) error {
 				videoId := fmt.Sprintf("%svideo_like_%d", config.EnvCfg.RedisPrefix, req.VideoId)   // 该视频的点赞数量，存入string
-				userLikedId := fmt.Sprintf("%suser_liked_%d", config.EnvCfg.RedisPrefix, userLiked) // 被赞用户的获赞数量，存入string
+				userLikedId := fmt.Sprintf("%suser_liked_%d", config.EnvCfg.RedisPrefix, userLiked) // 被赞用户的获赞总量，存入string
 				userLikeId := fmt.Sprintf("%suser_like_%d", config.EnvCfg.RedisPrefix, req.ActorId) // 用户的点赞记录，存入zset
 				pipe.IncrBy(ctx, videoId, 1)
 				pipe.IncrBy(ctx, userLikedId, 1)
@@ -333,7 +334,7 @@ func (c FavoriteServiceServerImpl) FavoriteAction(ctx context.Context, req *favo
 	return
 }
 
-// FavoriteList 判断是否合法
+// 自身服务调用：用户点赞的视频列表
 func (c FavoriteServiceServerImpl) FavoriteList(ctx context.Context, req *favorite.FavoriteListRequest) (resp *favorite.FavoriteListResponse, err error) {
 
 	ctx, span := tracing.Tracer.Start(ctx, "FavoriteServiceServerImpl")
@@ -346,7 +347,7 @@ func (c FavoriteServiceServerImpl) FavoriteList(ctx context.Context, req *favori
 		"user_id": req.UserId,
 	}).Debugf("Process start")
 
-	// 判断用户是否存在
+	// 1. 判断用户id是否存在
 	userResponse, err := userClient.GetUserExistInformation(ctx, &user.UserExistRequest{
 		UserId: req.UserId,
 	})
@@ -372,7 +373,7 @@ func (c FavoriteServiceServerImpl) FavoriteList(ctx context.Context, req *favori
 		}
 		return
 	}
-
+	// 2. 获取用户点赞的视频id列表：ZRevRange获取key在指定排名内的所有成员，0表示最高分的成员，-1表示最低分的成员
 	userId := fmt.Sprintf("%suser_like_%d", config.EnvCfg.RedisPrefix, req.UserId)
 	arr, err := redis2.Client.ZRevRange(ctx, userId, 0, -1).Result()
 	if err != nil {
@@ -396,13 +397,13 @@ func (c FavoriteServiceServerImpl) FavoriteList(ctx context.Context, req *favori
 		return resp, nil
 	}
 
+	// 将string数组转换为uint32数组
 	res := make([]uint32, len(arr))
 	for index, val := range arr {
 		num, _ := strconv.Atoi(val)
 		res[index] = uint32(num)
-
 	}
-
+	// 3. 调用feed服务查询具体视频信息
 	var VideoList []*feed.Video
 	value, err := feedClient.QueryVideos(ctx, &feed.QueryVideosRequest{
 		ActorId:  req.ActorId,
@@ -431,6 +432,7 @@ func (c FavoriteServiceServerImpl) FavoriteList(ctx context.Context, req *favori
 	return resp, nil
 }
 
+// 其他服务调用：用户是否喜欢该视频
 func (c FavoriteServiceServerImpl) IsFavorite(ctx context.Context, req *favorite.IsFavoriteRequest) (resp *favorite.IsFavoriteResponse, err error) {
 	ctx, span := tracing.Tracer.Start(ctx, "FavoriteServiceServerImpl")
 	defer span.End()
@@ -441,7 +443,7 @@ func (c FavoriteServiceServerImpl) IsFavorite(ctx context.Context, req *favorite
 		"ActorId":  req.ActorId,
 		"video_id": req.VideoId,
 	}).Debugf("Process start")
-	//判断视频id是否存在，我觉得大可不必
+	// 判断视频id是否存在
 	value, err := feedClient.QueryVideoExisted(ctx, &feed.VideoExistRequest{
 		VideoId: req.VideoId,
 	})
@@ -460,7 +462,7 @@ func (c FavoriteServiceServerImpl) IsFavorite(ctx context.Context, req *favorite
 	userId := fmt.Sprintf("%suser_like_%d", config.EnvCfg.RedisPrefix, req.ActorId)
 	videoId := fmt.Sprintf("%d", req.VideoId)
 
-	//等下单步跟下 返回值
+	// 查询redis，当前记录存在，返回一个时间戳，当前记录不存在，返回redis.Nil
 	ok, err := redis2.Client.ZScore(ctx, userId, videoId).Result()
 
 	if err == redis.Nil {
@@ -498,8 +500,7 @@ func (c FavoriteServiceServerImpl) IsFavorite(ctx context.Context, req *favorite
 
 }
 
-// 这里无法判断视频id是否存在，只有一个参数
-// 不影响正确与否
+// 其他服务调用：获取该视频的点赞数量
 func (c FavoriteServiceServerImpl) CountFavorite(ctx context.Context, req *favorite.CountFavoriteRequest) (resp *favorite.CountFavoriteResponse, err error) {
 
 	ctx, span := tracing.Tracer.Start(ctx, "FavoriteServiceServerImpl")
@@ -510,7 +511,7 @@ func (c FavoriteServiceServerImpl) CountFavorite(ctx context.Context, req *favor
 	logger.WithFields(logrus.Fields{
 		"video_id": req.VideoId,
 	}).Debugf("Process start")
-	//判断视频id是否存在，我觉得大可不必
+	// 判断视频id是否存在
 	Vresp, err := feedClient.QueryVideoExisted(ctx, &feed.VideoExistRequest{
 		VideoId: req.VideoId,
 	})
@@ -524,6 +525,7 @@ func (c FavoriteServiceServerImpl) CountFavorite(ctx context.Context, req *favor
 			StatusMsg:  strings.FavoriteServiceError,
 		}, err
 	}
+	// 获取该视频的点赞数量
 	videoId := fmt.Sprintf("%svideo_like_%d", config.EnvCfg.RedisPrefix, req.VideoId)
 	value, err := redis2.Client.Get(ctx, videoId).Result()
 	var num int
@@ -554,7 +556,7 @@ func (c FavoriteServiceServerImpl) CountFavorite(ctx context.Context, req *favor
 	return
 }
 
-// 判断用户是否合法
+// 其他服务调用：获取用户点赞的视频数量
 func (c FavoriteServiceServerImpl) CountUserFavorite(ctx context.Context, req *favorite.CountUserFavoriteRequest) (resp *favorite.CountUserFavoriteResponse, err error) {
 
 	ctx, span := tracing.Tracer.Start(ctx, "FavoriteServiceServerImpl")
@@ -566,7 +568,7 @@ func (c FavoriteServiceServerImpl) CountUserFavorite(ctx context.Context, req *f
 		"user_id": req.UserId,
 	}).Debugf("Process start")
 
-	//以下判断用户是否合法，我觉得大可不必
+	// 判断用户id是否存在
 	userResponse, err := userClient.GetUserExistInformation(ctx, &user.UserExistRequest{
 		UserId: req.UserId,
 	})
@@ -591,10 +593,9 @@ func (c FavoriteServiceServerImpl) CountUserFavorite(ctx context.Context, req *f
 		}
 		return
 	}
-
-	user_like_id := fmt.Sprintf("%suser_like_%d", config.EnvCfg.RedisPrefix, req.UserId)
-
-	value, err := redis2.Client.ZCard(ctx, user_like_id).Result()
+	// ZCard用于获取zset中成员的数量，即用户点赞的视频数量
+	userLikeId := fmt.Sprintf("%suser_like_%d", config.EnvCfg.RedisPrefix, req.UserId)
+	value, err := redis2.Client.ZCard(ctx, userLikeId).Result()
 	var num int64
 	if err == redis.Nil {
 		num = 0
@@ -624,7 +625,7 @@ func (c FavoriteServiceServerImpl) CountUserFavorite(ctx context.Context, req *f
 	return
 }
 
-// 判断用户是否合法
+// 其他服务调用：获取用户总共获得的点赞数量
 func (c FavoriteServiceServerImpl) CountUserTotalFavorited(ctx context.Context, req *favorite.CountUserTotalFavoritedRequest) (resp *favorite.CountUserTotalFavoritedResponse, err error) {
 	ctx, span := tracing.Tracer.Start(ctx, "FavoriteServiceServerImpl")
 	defer span.End()
@@ -636,7 +637,7 @@ func (c FavoriteServiceServerImpl) CountUserTotalFavorited(ctx context.Context, 
 		"user_id": req.UserId,
 	}).Debugf("Process start")
 
-	//以下判断用户是否合法，我觉得大可不必
+	// 判断用户id是否存在
 	userResponse, err := userClient.GetUserExistInformation(ctx, &user.UserExistRequest{
 		UserId: req.UserId,
 	})
@@ -663,9 +664,9 @@ func (c FavoriteServiceServerImpl) CountUserTotalFavorited(ctx context.Context, 
 		return
 	}
 
-	user_liked_id := fmt.Sprintf("%suser_liked_%d", config.EnvCfg.RedisPrefix, req.UserId)
-
-	value, err := redis2.Client.Get(ctx, user_liked_id).Result()
+	// 获取用户总共获得的点赞数量
+	userLikedId := fmt.Sprintf("%suser_liked_%d", config.EnvCfg.RedisPrefix, req.UserId)
+	value, err := redis2.Client.Get(ctx, userLikedId).Result()
 	var num int
 	if err == redis.Nil {
 		num = 0
@@ -694,5 +695,4 @@ func (c FavoriteServiceServerImpl) CountUserTotalFavorited(ctx context.Context, 
 		"response": resp,
 	}).Debugf("Process done.")
 	return
-
 }

@@ -129,7 +129,7 @@ func produceComment(ctx context.Context, event models.RecommendEvent) {
 	}
 }
 
-// ActionComment implements the CommentServiceImpl interface.
+// ActionComment 自身服务调用：评论/删除评论
 func (c CommentServiceImpl) ActionComment(ctx context.Context, request *comment.ActionCommentRequest) (resp *comment.ActionCommentResponse, err error) {
 	ctx, span := tracing.Tracer.Start(ctx, "ActionCommentService")
 	defer span.End()
@@ -162,7 +162,7 @@ func (c CommentServiceImpl) ActionComment(ctx context.Context, request *comment.
 		return
 	}
 
-	// Rate limiting
+	// 1. 限流
 	limiter := redis_rate.NewLimiter(redis.Client)
 	limiterKey := actionCommentLimitKey(request.ActorId)
 	limiterRes, err := limiter.Allow(ctx, limiterKey, redis_rate.PerSecond(actionCommentMaxQPS))
@@ -177,7 +177,6 @@ func (c CommentServiceImpl) ActionComment(ctx context.Context, request *comment.
 			StatusCode: strings.UnableToCreateCommentErrorCode,
 			StatusMsg:  strings.UnableToCreateCommentError,
 		}
-
 		return
 	}
 	if limiterRes.Allowed == 0 {
@@ -190,11 +189,10 @@ func (c CommentServiceImpl) ActionComment(ctx context.Context, request *comment.
 			StatusCode: strings.ActionCommentLimitedCode,
 			StatusMsg:  strings.ActionCommentLimited,
 		}
-
 		return
 	}
 
-	// Check if video exists
+	// 2. 检查视频是否存在
 	videoExistResp, err := feedClient.QueryVideoExisted(ctx, &feed.VideoExistRequest{
 		VideoId: request.VideoId,
 	})
@@ -222,7 +220,7 @@ func (c CommentServiceImpl) ActionComment(ctx context.Context, request *comment.
 		return
 	}
 
-	// Get target user
+	// 3. 获取进行评论操作的用户信息
 	userResponse, err := userClient.GetUserInfo(ctx, &user.UserRequest{
 		UserId:  request.ActorId,
 		ActorId: request.ActorId,
@@ -250,7 +248,7 @@ func (c CommentServiceImpl) ActionComment(ctx context.Context, request *comment.
 	}
 
 	pUser := userResponse.User
-
+	// 4. 评论或删除评论
 	switch request.ActionType {
 	case comment.ActionCommentType_ACTION_COMMENT_TYPE_ADD:
 		resp, err = addComment(ctx, logger, span, pUser, request.VideoId, pCommentText)
@@ -272,7 +270,7 @@ func (c CommentServiceImpl) ActionComment(ctx context.Context, request *comment.
 	return
 }
 
-// ListComment implements the CommentServiceImpl interface.
+// ListComment 自身服务调用：获取评论列表
 func (c CommentServiceImpl) ListComment(ctx context.Context, request *comment.ListCommentRequest) (resp *comment.ListCommentResponse, err error) {
 	ctx, span := tracing.Tracer.Start(ctx, "ListCommentService")
 	defer span.End()
@@ -283,7 +281,7 @@ func (c CommentServiceImpl) ListComment(ctx context.Context, request *comment.Li
 		"video_id": request.VideoId,
 	}).Debugf("Process start")
 
-	// Check if video exists
+	// 1. 检查视频是否存在
 	videoExistResp, err := feedClient.QueryVideoExisted(ctx, &feed.VideoExistRequest{
 		VideoId: request.VideoId,
 	})
@@ -310,7 +308,7 @@ func (c CommentServiceImpl) ListComment(ctx context.Context, request *comment.Li
 		}
 		return
 	}
-
+	// 2. 从 DB 获取评论
 	var pCommentList []models.Comment
 	result := database.Client.WithContext(ctx).
 		Where("video_id = ?", request.VideoId).
@@ -398,7 +396,6 @@ func (c CommentServiceImpl) ListComment(ctx context.Context, request *comment.Li
 	return
 }
 
-// CountComment implements the CommentServiceImpl interface.
 func (c CommentServiceImpl) CountComment(ctx context.Context, request *comment.CountCommentRequest) (resp *comment.CountCommentResponse, err error) {
 	ctx, span := tracing.Tracer.Start(ctx, "CountCommentService")
 	defer span.End()
@@ -412,7 +409,7 @@ func (c CommentServiceImpl) CountComment(ctx context.Context, request *comment.C
 	countStringKey := fmt.Sprintf("CommentCount-%d", request.VideoId)
 	countString, err := cached.GetWithFunc(ctx, countStringKey,
 		func(ctx context.Context, key string) (string, error) {
-			rCount, err := count(ctx, request.VideoId)
+			rCount, err := count(ctx, request.VideoId) // 从 DB 获取评论数量
 
 			return strconv.FormatInt(rCount, 10), err
 		})
@@ -450,7 +447,7 @@ func addComment(ctx context.Context, logger *logrus.Entry, span trace.Span, pUse
 		UserId:  pUser.Id,
 		Content: pCommentText,
 	}
-
+	// 1. 写入DB
 	result := database.Client.WithContext(ctx).Create(&rComment)
 	if result.Error != nil {
 		logger.WithFields(logrus.Fields{
@@ -467,9 +464,10 @@ func addComment(ctx context.Context, logger *logrus.Entry, span trace.Span, pUse
 		return
 	}
 
-	// Rate comment
+	// 2. 对评论进行评分
 	go rateComment(logger, span, pCommentText, rComment.ID)
 
+	// 3. 写入MQ给推荐系统
 	wg := sync.WaitGroup{}
 	wg.Add(1)
 	go func() {
@@ -498,6 +496,7 @@ func addComment(ctx context.Context, logger *logrus.Entry, span trace.Span, pUse
 
 func deleteComment(ctx context.Context, logger *logrus.Entry, span trace.Span, pUser *user.User, pVideoID uint32, commentID uint32) (resp *comment.ActionCommentResponse, err error) {
 	rComment := models.Comment{}
+	// 1. 查询评论信息
 	result := database.Client.WithContext(ctx).
 		Where("video_id = ? AND id = ?", pVideoID, commentID).
 		First(&rComment)
@@ -515,7 +514,7 @@ func deleteComment(ctx context.Context, logger *logrus.Entry, span trace.Span, p
 		}
 		return
 	}
-
+	// 2. 检查评论创建者id和删除者id是否一致
 	if rComment.UserId != pUser.Id {
 		logger.Errorf("Comment creator and deletor not match")
 		resp = &comment.ActionCommentResponse{
@@ -524,7 +523,7 @@ func deleteComment(ctx context.Context, logger *logrus.Entry, span trace.Span, p
 		}
 		return
 	}
-
+	// 3. 删除评论
 	result = database.Client.WithContext(ctx).Delete(&models.Comment{}, commentID)
 	if result.Error != nil {
 		logger.WithFields(logrus.Fields{

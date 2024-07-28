@@ -1,6 +1,7 @@
 package models
 
 import (
+	"GuGoTik/src/storage/cached"
 	"GuGoTik/src/storage/database"
 	"gorm.io/gorm"
 	"regexp"
@@ -23,6 +24,8 @@ func (u *User) IsNameEmail() bool {
 	reg := regexp.MustCompile(pattern)
 	return reg.MatchString(u.UserName)
 }
+
+var _ cached.MultiCachedItem = (*User)(nil) // *User 是否实现 cached.MultiCachedItem 接口
 
 func (u *User) IsDirty() bool {
 	return u.UserName != ""
