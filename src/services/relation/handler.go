@@ -169,7 +169,8 @@ func (r RelationServiceImpl) Follow(ctx context.Context, request *relation.Relat
 		UserId:  request.UserId,  // 被关注者的 ID
 	}
 
-	tx := database.Client.WithContext(ctx).Begin() // 开始事务
+	// 开始事务
+	tx := database.Client.WithContext(ctx).Begin()
 	defer func() {
 		if err != nil {
 			tx.Rollback()
@@ -195,7 +196,7 @@ func (r RelationServiceImpl) Follow(ctx context.Context, request *relation.Relat
 		}
 		return
 	}
-
+	// 不存在就插入一条关注记录
 	if err = tx.Create(&rRelation).Error; err != nil {
 		resp = &relation.RelationActionResponse{
 			StatusCode: strings.UnableToFollowErrorCode,
@@ -204,7 +205,7 @@ func (r RelationServiceImpl) Follow(ctx context.Context, request *relation.Relat
 		logging.SetSpanError(span, err)
 		return
 	}
-
+	// set: key:follow_list_actorID val:userID
 	if err = updateFollowListCache(ctx, request.ActorId, rRelation, true, span, logger); err != nil {
 		logger.WithFields(logrus.Fields{
 			"err": err,
@@ -212,7 +213,7 @@ func (r RelationServiceImpl) Follow(ctx context.Context, request *relation.Relat
 		logging.SetSpanError(span, err)
 		return
 	}
-
+	// set: key:follower_list_userID val:actorID
 	if err = updateFollowerListCache(ctx, request.UserId, rRelation, true, span, logger); err != nil {
 		logger.WithFields(logrus.Fields{
 			"err": err,
@@ -220,7 +221,7 @@ func (r RelationServiceImpl) Follow(ctx context.Context, request *relation.Relat
 		logging.SetSpanError(span, err)
 		return
 	}
-
+	// 关注+1
 	if err = updateFollowCountCache(ctx, request.ActorId, true, span, logger); err != nil {
 		logger.WithFields(logrus.Fields{
 			"err": err,
@@ -228,7 +229,7 @@ func (r RelationServiceImpl) Follow(ctx context.Context, request *relation.Relat
 		logging.SetSpanError(span, err)
 		return
 	}
-
+	// 粉丝+1
 	if err = updateFollowerCountCache(ctx, request.UserId, true, span, logger); err != nil {
 		logger.WithFields(logrus.Fields{
 			"err": err,
@@ -236,6 +237,7 @@ func (r RelationServiceImpl) Follow(ctx context.Context, request *relation.Relat
 		logging.SetSpanError(span, err)
 		return
 	}
+	// 先写入DB 再删除缓存
 	cached.TagDelete(ctx, fmt.Sprintf("IsFollowedCache-%d-%d", request.UserId, request.ActorId))
 	resp = &relation.RelationActionResponse{
 		StatusCode: strings.ServiceOKCode,
@@ -642,7 +644,7 @@ func (r RelationServiceImpl) GetFriendList(ctx context.Context, request *relatio
 	var followRelationList []models.Relation
 	// 构建关注列表的用户 ID 映射
 	followingMap := make(map[uint32]bool)
-	//判断是否需要读db
+	// 判断是否需要读db
 	db := false
 
 	if err != nil {
@@ -695,6 +697,7 @@ func (r RelationServiceImpl) GetFriendList(ctx context.Context, request *relatio
 		for _, rel := range followRelationList {
 			followingMap[rel.UserId] = true
 		}
+		// 写入缓存
 		for _, rel := range followRelationList {
 			redis2.Client.SAdd(ctx, cacheKey, rel.UserId)
 		}
@@ -812,6 +815,7 @@ func (r RelationServiceImpl) GetFriendList(ctx context.Context, request *relatio
 	return
 }
 
+// 是否关注 key：IsFollowedCache-userid-touserid val：0 or 1
 func (r RelationServiceImpl) IsFollow(ctx context.Context, request *relation.IsFollowRequest) (resp *relation.IsFollowResponse, err error) {
 
 	ctx, span := tracing.Tracer.Start(ctx, "isFollowService")
@@ -1094,6 +1098,7 @@ func string2Int(s []string, logger *logrus.Entry, span trace.Span) (i []uint32, 
 
 // followOp = true  ->  follow
 // followOp = false ->  unfollow
+// set:actorID关注userID key:follow_list_actorID val:userID
 func updateFollowListCache(ctx context.Context, actorID uint32, relation models.Relation, followOp bool, span trace.Span, logger *logrus.Entry) (err error) {
 
 	cacheKey := config.EnvCfg.RedisPrefix + fmt.Sprintf("follow_list_%d", actorID)
@@ -1112,6 +1117,7 @@ func updateFollowListCache(ctx context.Context, actorID uint32, relation models.
 	return
 }
 
+// set:userID被关注actorID key:follower_list_userID val:actorID
 func updateFollowerListCache(ctx context.Context, userID uint32, relation models.Relation, followOp bool, span trace.Span, logger *logrus.Entry) (err error) {
 	cacheKey := config.EnvCfg.RedisPrefix + fmt.Sprintf("follower_list_%d", userID)
 
@@ -1130,6 +1136,7 @@ func updateFollowerListCache(ctx context.Context, userID uint32, relation models
 	return
 }
 
+// string: actorID关注数量 key: follow_count_actorID val: count±1
 func updateFollowCountCache(ctx context.Context, actorID uint32, followOp bool, span trace.Span, logger *logrus.Entry) error {
 	cacheKey := fmt.Sprintf("follow_count_%d", actorID)
 	var count uint32
@@ -1200,6 +1207,7 @@ func updateFollowCountCache(ctx context.Context, actorID uint32, followOp bool, 
 	return nil
 }
 
+// string: userID粉丝数量 key: follower_count_userID val: count±1
 func updateFollowerCountCache(ctx context.Context, userID uint32, followOp bool, span trace.Span, logger *logrus.Entry) error {
 	cacheKey := fmt.Sprintf("follower_count_%d", userID)
 	var count uint32

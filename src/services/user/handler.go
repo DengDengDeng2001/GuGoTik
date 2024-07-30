@@ -39,6 +39,7 @@ func (a UserServiceImpl) New() {
 	favoriteClient = favorite.NewFavoriteServiceClient(favoriteConn)
 }
 
+// 查询UserID的信息
 func (a UserServiceImpl) GetUserInfo(ctx context.Context, request *user.UserRequest) (resp *user.UserResponse, err error) {
 	ctx, span := tracing.Tracer.Start(ctx, "GetUserInfo")
 	defer span.End()

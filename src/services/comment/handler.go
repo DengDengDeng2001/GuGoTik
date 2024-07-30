@@ -329,10 +329,10 @@ func (c CommentServiceImpl) ListComment(ctx context.Context, request *comment.Li
 		return
 	}
 
-	// Put the magic comment to the first front
+	// 3. 把特定评论排在列表前面的位置
 	reindexCommentList(&pCommentList)
 
-	// Get user info of each comment
+	// 4. 获取每条评论的用户信息
 	rCommentList := make([]*comment.Comment, 0, result.RowsAffected)
 	userMap := make(map[uint32]*user.User)
 	for _, pComment := range pCommentList {
@@ -371,7 +371,7 @@ func (c CommentServiceImpl) ListComment(ctx context.Context, request *comment.Li
 		return
 	}
 
-	// Create rCommentList
+	// 返回响应
 	for _, pComment := range pCommentList {
 		curUser := userMap[pComment.UserId]
 
@@ -629,7 +629,7 @@ func count(ctx context.Context, videoId uint32) (count int64, err error) {
 	return count, result.Error
 }
 
-// Put the magic comment to the front
+// 把特定评论放在前面
 func reindexCommentList(commentList *[]models.Comment) {
 	var magicComments []models.Comment
 	var commonComments []models.Comment

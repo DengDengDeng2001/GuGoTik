@@ -11,9 +11,9 @@ import "GuGoTik/src/rpc/user"
 
 type RelationActionReq struct {
 	Token      string `form:"token" binding:"required"`
-	ActorId    int    `form:"actor_id"`
-	UserId     int    `form:"to_user_id"`
-	ActionType int    `form:"action_type" binding:"required"`
+	ActorId    int    `form:"actor_id"`                       // 用户id
+	UserId     int    `form:"to_user_id"`                     // 对方用户id
+	ActionType int    `form:"action_type" binding:"required"` // 1-关注，2-取消关注
 }
 
 type RelationActionRes struct {
