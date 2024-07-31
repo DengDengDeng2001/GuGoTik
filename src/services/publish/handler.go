@@ -139,7 +139,7 @@ func (a PublishServiceImpl) ListVideo(ctx context.Context, req *publish.ListVide
 	logging.SetSpanWithHostname(span)
 	logger := logging.LogService("PublishServiceImpl.ListVideo").WithContext(ctx)
 
-	// Check if user exist
+	// 检查发布视频的用户是否存在
 	userExistResp, err := userClient.GetUserExistInformation(ctx, &user.UserExistRequest{
 		UserId: req.UserId,
 	})
@@ -166,7 +166,7 @@ func (a PublishServiceImpl) ListVideo(ctx context.Context, req *publish.ListVide
 		}
 		return
 	}
-
+	// 简略查询视频信息
 	var videos []models.Video
 	err = database.Client.WithContext(ctx).
 		Where("user_id = ?", req.UserId).
