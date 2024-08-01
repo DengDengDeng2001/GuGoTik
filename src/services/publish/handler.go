@@ -166,7 +166,7 @@ func (a PublishServiceImpl) ListVideo(ctx context.Context, req *publish.ListVide
 		}
 		return
 	}
-	// 简略查询视频信息
+	// 简略查询视频信息，不包含点赞，评论数量，是否点赞
 	var videos []models.Video
 	err = database.Client.WithContext(ctx).
 		Where("user_id = ?", req.UserId).
@@ -183,6 +183,7 @@ func (a PublishServiceImpl) ListVideo(ctx context.Context, req *publish.ListVide
 		}
 		return
 	}
+	// 提取出videoId
 	videoIds := make([]uint32, 0, len(videos))
 	for _, video := range videos {
 		videoIds = append(videoIds, video.ID)

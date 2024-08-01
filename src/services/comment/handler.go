@@ -259,7 +259,7 @@ func (c CommentServiceImpl) ActionComment(ctx context.Context, request *comment.
 	if err != nil {
 		return
 	}
-
+	// 先修改DB再删除缓存
 	countCommentKey := fmt.Sprintf("CommentCount-%d", request.VideoId)
 	cached.TagDelete(ctx, countCommentKey)
 

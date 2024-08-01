@@ -18,6 +18,7 @@ type storageProvider interface {
 
 type PutObjectOutput struct{}
 
+// 多态接口，根据绑定对象不同实现不同的方法，外部包直接使用file.xxx()调用
 func init() {
 	switch config.EnvCfg.StorageType { // Append more type here to provide more file action ability
 	case "fs":

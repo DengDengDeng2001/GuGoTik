@@ -328,6 +328,7 @@ func (s FeedServiceImpl) ListVideos(ctx context.Context, request *feed.ListFeedR
 	return resp, err
 }
 
+// 查询videoIds中的详细视频信息，返回视频列表，包括视频相关url，评论点赞数量，是否点赞
 func (s FeedServiceImpl) QueryVideos(ctx context.Context, req *feed.QueryVideosRequest) (resp *feed.QueryVideosResponse, err error) {
 	ctx, span := tracing.Tracer.Start(ctx, "QueryVideosService")
 	defer span.End()
@@ -507,14 +508,15 @@ func findRecommendVideos(ctx context.Context, recommendVideoId []uint32) ([]*mod
 	return videos, nil
 }
 
+// 查询videoIds中的详细视频信息，返回视频列表，包括视频相关url，评论点赞数量，是否点赞
 func queryDetailed(ctx context.Context, logger *logrus.Entry, actorId uint32, videos []*models.Video) (respVideoList []*feed.Video) {
 	ctx, span := tracing.Tracer.Start(ctx, "queryDetailed")
 	defer span.End()
 	logging.SetSpanWithHostname(span)
 	logger = logging.LogService("ListVideos.queryDetailed").WithContext(ctx)
-	respVideoList = make([]*feed.Video, len(videos))
 
-	// Init respVideoList
+	// 构造返回响应VideoList
+	respVideoList = make([]*feed.Video, len(videos))
 	for i, v := range videos {
 		respVideoList[i] = &feed.Video{
 			Id:     v.ID,
@@ -523,7 +525,7 @@ func queryDetailed(ctx context.Context, logger *logrus.Entry, actorId uint32, vi
 		}
 	}
 
-	// Create userid -> user map to reduce duplicate user info query
+	// 将User信息存入map，防止重复查询
 	userMap := make(map[uint32]*user.User)
 	for _, video := range videos {
 		userMap[video.UserId] = &user.User{}
@@ -552,7 +554,7 @@ func queryDetailed(ctx context.Context, logger *logrus.Entry, actorId uint32, vi
 	wg := sync.WaitGroup{}
 	for i, v := range videos {
 		wg.Add(4)
-		// fill play url
+		// a. 填充视频播放url
 		go func(i int, v *models.Video) {
 			defer wg.Done()
 			playUrl, localErr := file.GetLink(ctx, v.FileName, v.UserId)
@@ -568,7 +570,7 @@ func queryDetailed(ctx context.Context, logger *logrus.Entry, actorId uint32, vi
 			respVideoList[i].PlayUrl = playUrl
 		}(i, v)
 
-		// fill cover url
+		// b. 填充视频封面url
 		go func(i int, v *models.Video) {
 			defer wg.Done()
 			coverUrl, localErr := file.GetLink(ctx, v.CoverName, v.UserId)
@@ -584,7 +586,7 @@ func queryDetailed(ctx context.Context, logger *logrus.Entry, actorId uint32, vi
 			respVideoList[i].CoverUrl = coverUrl
 		}(i, v)
 
-		// fill favorite count
+		// c. 填充视频点赞数量
 		go func(i int, v *models.Video) {
 			defer wg.Done()
 			favoriteCount, localErr := FavoriteClient.CountFavorite(ctx, &favorite.CountFavoriteRequest{
@@ -601,7 +603,7 @@ func queryDetailed(ctx context.Context, logger *logrus.Entry, actorId uint32, vi
 			respVideoList[i].FavoriteCount = favoriteCount.Count
 		}(i, v)
 
-		// fill comment count
+		// d. 填充视频评论数量
 		go func(i int, v *models.Video) {
 			defer wg.Done()
 			commentCount, localErr := CommentClient.CountComment(ctx, &comment.CountCommentRequest{
@@ -619,7 +621,7 @@ func queryDetailed(ctx context.Context, logger *logrus.Entry, actorId uint32, vi
 			respVideoList[i].CommentCount = commentCount.CommentCount
 		}(i, v)
 
-		// fill is favorite
+		// e. 填充用户是否点赞该视频
 		if actorId != 0 {
 			wg.Add(1)
 			go func(i int, v *models.Video) {
@@ -653,6 +655,7 @@ func queryDetailed(ctx context.Context, logger *logrus.Entry, actorId uint32, vi
 	return
 }
 
+// 查询videoIds中的详细视频信息，返回视频列表，包括视频相关url，评论点赞数量，是否点赞
 func query(ctx context.Context, logger *logrus.Entry, actorId uint32, videoIds []uint32) (resp []*feed.Video, err error) {
 	var videos []*models.Video
 	//Gorm的操作，以后不需要在单独开span，通过传ctx的方式完成 "WithContext(ctx)"，如果在函数需要这样写，但是这个的目的是为了获取子 Span 的 ctx
@@ -663,6 +666,7 @@ func query(ctx context.Context, logger *logrus.Entry, actorId uint32, videoIds [
 	return queryDetailed(ctx, logger, actorId, videos), nil
 }
 
+// 检查时间戳是否合法并转为日期类型
 func isUnixMilliTimestamp(s string) (int64, bool) {
 	timestamp, err := strconv.ParseInt(s, 10, 64)
 	if err != nil {
